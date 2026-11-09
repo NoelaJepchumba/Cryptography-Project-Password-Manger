@@ -10,6 +10,106 @@ const { subtle } = require('crypto').webcrypto;
 const PBKDF2_ITERATIONS = 100000; // number of iterations for PBKDF2 algorithm
 const MAX_PASSWORD_LENGTH = 64;   // we can assume no password is longer than this many characters
 
+/**
+ * Pads a password to a fixed 64-character length.
+ * The first two characters store the original password length.
+ */
+function padPassword(password) {
+    if (typeof password !== "string") {
+        throw new TypeError("Password must be a string");
+    }
+
+    if (password.length > MAX_PASSWORD_LENGTH) {
+        throw new Error("Password cannot exceed 64 characters");
+    }
+
+    const length = String(password.length).padStart(2, "0");
+    const paddedPassword = password.padEnd(MAX_PASSWORD_LENGTH, "\0");
+
+    return length + paddedPassword;
+}
+
+/**
+ * Removes padding and returns the original password.
+ */
+function unpadPassword(paddedPassword) {
+    const length = Number(paddedPassword.slice(0, 2));
+
+    if (
+        !Number.isInteger(length) ||
+        length < 0 ||
+        length > MAX_PASSWORD_LENGTH ||
+        paddedPassword.length !== MAX_PASSWORD_LENGTH + 2
+    ) {
+        throw new Error("Invalid padded password");
+    }
+
+    return paddedPassword.slice(2, 2 + length);
+}
+
+
+/**
+ * Encrypts a password using AES-GCM.
+ * The domain name is authenticated as additional authenticated data (AAD).
+ */
+async function encryptPassword(aesKey, domain, password) {
+    // Generate a fresh 12-byte initialization vector.
+    const iv = getRandomBytes(12);
+
+    // Pad the password before encryption.
+    const paddedPassword = padPassword(password);
+
+    // Convert the padded password and domain into buffers.
+    const plaintext = stringToBuffer(paddedPassword);
+    const additionalData = stringToBuffer(domain);
+
+    // Encrypt using AES-GCM.
+    const ciphertext = await subtle.encrypt(
+        {
+            name: "AES-GCM",
+            iv: iv,
+            additionalData: additionalData,
+            tagLength: 128
+        },
+        aesKey,
+        plaintext
+    );
+
+    // Store the IV and ciphertext in Base64 format.
+    return {
+        iv: encodeBuffer(iv),
+        ciphertext: encodeBuffer(ciphertext)
+    };
+}
+
+/**
+ * Decrypts a password using AES-GCM.
+ * Authentication fails if the wrong domain is supplied.
+ */
+async function decryptPassword(aesKey, domain, encryptedRecord) {
+    const iv = decodeBuffer(encryptedRecord.iv);
+    const ciphertext = decodeBuffer(encryptedRecord.ciphertext);
+
+    const additionalData = stringToBuffer(domain);
+
+    // AES-GCM verifies the authentication tag and AAD.
+    const plaintext = await subtle.decrypt(
+        {
+            name: "AES-GCM",
+            iv: iv,
+            additionalData: additionalData,
+            tagLength: 128
+        },
+        aesKey,
+        ciphertext
+    );
+
+    const paddedPassword = bufferToString(plaintext);
+
+    return unpadPassword(paddedPassword);
+}
+
+
 /********* Implementation ********/
 class Keychain {
   /**
@@ -121,4 +221,12 @@ class Keychain {
   };
 };
 
+
 module.exports = { Keychain }
+module.exports = {
+    Keychain,
+    padPassword,
+    unpadPassword,
+    encryptPassword,
+    decryptPassword
+};
