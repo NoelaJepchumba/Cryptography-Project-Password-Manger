@@ -113,6 +113,51 @@ async function decryptPassword(aesKey, domain, encryptedRecord) {
 }
 
 
+/********* Member 3 helpers: database management ********/
+
+// Fixed label that is HMAC'd with the derived key to check the master password on load.
+// Only a keyed MAC of a public constant is stored, never the password or a hash of it.
+const PASSWORD_CHECK_LABEL = "keychain-password-check";
+
+/**
+ * Computes the lookup key for a domain: Base64(HMAC(hmacKey, domain)).
+ * The KVS is indexed by this value, so domain names never appear in the clear.
+ */
+async function hmacDomain(hmacKey, name) {
+    const tag = await subtle.sign("HMAC", hmacKey, stringToBuffer(name));
+    return encodeBuffer(tag);
+}
+
+/**
+ * Computes the password-check tag stored in the serialized keychain.
+ */
+async function computePasswordCheck(hmacKey) {
+    return hmacDomain(hmacKey, PASSWORD_CHECK_LABEL);
+}
+
+/**
+ * Returns Base64(SHA-256(str)). Used as the rollback/integrity checksum.
+ */
+async function sha256Base64(str) {
+    const digest = await subtle.digest("SHA-256", stringToBuffer(str));
+    return encodeBuffer(digest);
+}
+
+/**
+ * Compares two strings without returning early on the first differing character.
+ */
+function constantTimeEqual(a, b) {
+    if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) {
+        return false;
+    }
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+        diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return diff === 0;
+}
+
+
 /********* Implementation ********/
 class Keychain {
   /**
@@ -123,9 +168,10 @@ class Keychain {
    *  You may design the constructor with any parameters you would like. 
    * Return Type: void
    */
-constructor(salt, aesKey, hmacKey) {
+constructor(salt, aesKey, hmacKey, passwordCheck) {
     this.data = {
         salt: encodeBuffer(salt),
+        passwordCheck: passwordCheck,
         kvs: {}
     };
 
@@ -151,6 +197,23 @@ static async init(password) {
 
     // Generate a random salt.
     const salt = getRandomBytes(SALT_LENGTH);
+
+    // Derive the AES-GCM and HMAC keys (one PBKDF2 call).
+    const { aesKey, hmacKey } = await Keychain.deriveKeys(password, salt);
+
+    // Store a password-check tag so load() can reject a wrong master password.
+    const passwordCheck = await computePasswordCheck(hmacKey);
+
+    // Return initialized Keychain.
+    return new Keychain(salt, aesKey, hmacKey, passwordCheck);
+}
+
+/**
+ * Derives the AES-GCM and HMAC keys from the master password and salt.
+ * Shared by init() and load(); calls PBKDF2 exactly once.
+ * (Key derivation logic written by Member 2, moved here unchanged so load() can reuse it.)
+ */
+static async deriveKeys(password, salt) {
 
     // Import the master password.
     const passwordKey = await subtle.importKey(
@@ -200,8 +263,7 @@ static async init(password) {
         ["sign", "verify"]
     );
 
-    // Return initialized Keychain.
-    return new Keychain(salt, aesKey, hmacKey);
+    return { aesKey, hmacKey };
 }
 
 
@@ -223,7 +285,46 @@ static async init(password) {
     * Return Type: Keychain
     */
   static async load(password, repr, trustedDataCheck) {
-    throw "Not Implemented!";
+    if (typeof password !== "string" || typeof repr !== "string") {
+      throw new TypeError("Password and representation must be strings");
+    }
+
+    // 1. Rollback / tampering check against the trusted SHA-256 checksum.
+    //    Done first, before anything in repr is trusted or used.
+    if (trustedDataCheck !== undefined) {
+      const checksum = await sha256Base64(repr);
+      if (!constantTimeEqual(checksum, trustedDataCheck)) {
+        throw new Error("Integrity check failed: keychain may have been tampered with or rolled back");
+      }
+    }
+
+    // 2. Parse the serialized keychain.
+    let contents;
+    try {
+      contents = JSON.parse(repr);
+    } catch (e) {
+      throw new Error("Invalid keychain representation");
+    }
+    if (!contents || typeof contents.salt !== "string" ||
+        typeof contents.passwordCheck !== "string" ||
+        typeof contents.kvs !== "object" || contents.kvs === null) {
+      throw new Error("Invalid keychain representation");
+    }
+
+    // 3. Re-derive the keys from the password and the stored salt (one PBKDF2 call).
+    const salt = decodeBuffer(contents.salt);
+    const { aesKey, hmacKey } = await Keychain.deriveKeys(password, salt);
+
+    // 4. Verify the master password.
+    const expectedCheck = await computePasswordCheck(hmacKey);
+    if (!constantTimeEqual(expectedCheck, contents.passwordCheck)) {
+      throw new Error("Incorrect password");
+    }
+
+    // 5. Rebuild the keychain from the serialized kvs field.
+    const keychain = new Keychain(salt, aesKey, hmacKey, contents.passwordCheck);
+    keychain.data.kvs = contents.kvs;
+    return keychain;
   };
 
   /**
@@ -239,7 +340,11 @@ static async init(password) {
     * Return Type: array
     */ 
   async dump() {
-    throw "Not Implemented!";
+    // Only public data is serialized: salt, password-check tag and the encrypted kvs.
+    // The keys in this.secrets are never written out.
+    const serialized = JSON.stringify(this.data);
+    const checksum = await sha256Base64(serialized);
+    return [serialized, checksum];
   };
 
   /**
@@ -252,7 +357,23 @@ static async init(password) {
     * Return Type: Promise<string>
     */
   async get(name) {
-    throw "Not Implemented!";
+    if (typeof name !== "string") {
+      throw new TypeError("Domain name must be a string");
+    }
+
+    const lookupKey = await hmacDomain(this.secrets.hmacKey, name);
+
+    if (!Object.prototype.hasOwnProperty.call(this.data.kvs, lookupKey)) {
+      return null;
+    }
+
+    // Decryption uses the domain as AAD, so a record swapped in from another
+    // domain fails authentication and throws (swap-attack defense).
+    try {
+      return await decryptPassword(this.secrets.aesKey, name, this.data.kvs[lookupKey]);
+    } catch (e) {
+      throw new Error("Tampering detected: record for this domain failed authentication");
+    }
   };
 
   /** 
@@ -266,7 +387,15 @@ static async init(password) {
   * Return Type: void
   */
   async set(name, value) {
-    throw "Not Implemented!";
+    if (typeof name !== "string" || typeof value !== "string") {
+      throw new TypeError("Domain name and value must be strings");
+    }
+
+    const lookupKey = await hmacDomain(this.secrets.hmacKey, name);
+
+    // Pads to 64 chars and encrypts with AES-GCM under a fresh IV, binding the domain as AAD.
+    // Overwrites the existing record if the domain is already present.
+    this.data.kvs[lookupKey] = await encryptPassword(this.secrets.aesKey, name, value);
   };
 
   /**
@@ -278,12 +407,21 @@ static async init(password) {
     * Return Type: Promise<boolean>
   */
   async remove(name) {
-    throw "Not Implemented!";
+    if (typeof name !== "string") {
+      throw new TypeError("Domain name must be a string");
+    }
+
+    const lookupKey = await hmacDomain(this.secrets.hmacKey, name);
+
+    if (Object.prototype.hasOwnProperty.call(this.data.kvs, lookupKey)) {
+      delete this.data.kvs[lookupKey];
+      return true;
+    }
+    return false;
   };
 };
 
 
-module.exports = { Keychain }
 module.exports = {
     Keychain,
     padPassword,
