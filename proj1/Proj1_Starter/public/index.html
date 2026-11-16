@@ -1,0 +1,48 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Password Vault</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>My Password Vault 🔐</h1>
+                <p>Your passwords, securely stored.</p>
+            </div>
+            <button id="lockButton" class="lock-button">Lock Vault</button>
+        </header>
+
+        <section class="card">
+            <h2>Save a Password</h2>
+            <form id="addForm">
+                <label for="domain">Website / Domain</label>
+                <input id="domain" type="text" placeholder="e.g. google.com" required>
+
+                <label for="newPassword">Password</label>
+                <input id="newPassword" type="password" maxlength="64" required>
+
+                <button type="submit">Save Password</button>
+            </form>
+            <p id="addMessage"></p>
+        </section>
+
+        <section class="card">
+            <h2>Find a Password</h2>
+            <form id="getForm">
+                <label for="searchDomain">Website / Domain</label>
+                <input id="searchDomain" type="text" placeholder="e.g. google.com" required>
+                <button type="submit">Retrieve Password</button>
+            </form>
+            <div id="result"></div>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+

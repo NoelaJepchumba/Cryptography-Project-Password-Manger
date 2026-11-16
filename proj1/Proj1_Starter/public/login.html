@@ -1,0 +1,33 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unlock Password Vault</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <section class="card">
+            <h1>🔐 My Password Vault</h1>
+            <p>Enter your master password to unlock your vault.</p>
+
+            <form id="loginForm">
+                <label for="masterPassword">Master Password</label>
+                <input
+                    type="password"
+                    id="masterPassword"
+                    placeholder="Enter master password"
+                    required
+                >
+                <button type="submit">Unlock Vault</button>
+            </form>
+
+            <p id="loginMessage"></p>
+        </section>
+    </div>
+
+    <script src="login.js"></script>
+</body>
+</html>

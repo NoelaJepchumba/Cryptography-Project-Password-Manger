@@ -1,0 +1,103 @@
+
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background: #f4eff8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #302438;
+}
+
+.login-container {
+    background: white;
+    width: 90%;
+    max-width: 430px;
+    padding: 40px;
+    border-radius: 16px;
+    box-shadow: 0 8px 30px rgba(60, 20, 70, 0.1);
+    text-align: center;
+}
+
+.logo {
+    font-size: 45px;
+    margin-bottom: 15px;
+}
+
+h1 {
+    color: #652477;
+    font-size: 25px;
+    margin-bottom: 12px;
+}
+
+.subtitle {
+    color: #817687;
+    font-size: 14px;
+    margin-bottom: 35px;
+    line-height: 1.5;
+}
+
+form {
+    text-align: left;
+}
+
+label {
+    display: block;
+    font-size: 14px;
+    font-weight: bold;
+    margin-bottom: 10px;
+}
+
+.password-input {
+    display: flex;
+    border: 1px solid #d8c9df;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 22px;
+}
+
+.password-input input {
+    flex: 1;
+    min-width: 0;
+    padding: 14px;
+    border: none;
+    outline: none;
+    font-size: 14px;
+}
+
+.password-input button {
+    background: white;
+    border: none;
+    padding: 0 14px;
+    color: #762b8c;
+    cursor: pointer;
+}
+
+.unlock-btn {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 8px;
+    background: #702987;
+    color: white;
+    font-size: 15px;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.unlock-btn:hover {
+    background: #552068;
+}
+
+.security-note {
+    margin-top: 25px;
+    font-size: 12px;
+    color: #94889a;
+}
