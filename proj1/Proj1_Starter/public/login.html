@@ -7,26 +7,60 @@
     <title>Unlock Password Vault</title>
     <link rel="stylesheet" href="style.css">
 </head>
-<body>
-    <div class="container login-container">
-        <section class="card">
-            <h1>🔐 My Password Vault</h1>
-            <p>Enter your master password to unlock your vault.</p>
+<body class="login-page">
+    <main class="login-shell">
+        <section class="login-intro" aria-label="Vault security">
+            <div class="intro-topline">
+                <div class="brand-mark" aria-hidden="true">PV</div>
+                <span>Personal vault</span>
+            </div>
+            <div class="intro-story">
+                <p class="eyebrow">Your private digital keychain</p>
+                <h1>Passwords are safer when they stay yours.</h1>
+                <p class="intro-copy">Store sign-ins, keep them organized, and open your vault only with the master password you control.</p>
+            </div>
+            <div class="intro-details">
+                <div><strong>Private</strong><span>Master-password access</span></div>
+                <div><strong>Encrypted</strong><span>Saved credentials protected</span></div>
+                <div><strong>Organized</strong><span>Everything in one place</span></div>
+            </div>
+            <div class="security-line"><span></span> Secure local workspace</div>
+        </section>
+
+        <section class="login-panel">
+            <div class="login-heading">
+                <p class="eyebrow">Welcome back</p>
+                <h2>Unlock your vault</h2>
+                <p>Enter your account details to continue to your password workspace.</p>
+            </div>
 
             <form id="loginForm">
-                <label for="masterPassword">Master Password</label>
+                <label for="email">Email address</label>
                 <input
-                    type="password"
-                    id="masterPassword"
-                    placeholder="Enter master password"
+                    type="email"
+                    id="email"
+                    placeholder="you@example.com"
+                    autocomplete="email"
                     required
                 >
-                <button type="submit">Unlock Vault</button>
+
+                <label for="masterPassword">Master password</label>
+                <div class="password-field">
+                    <input
+                        type="password"
+                        id="masterPassword"
+                        placeholder="Enter your master password"
+                        autocomplete="current-password"
+                        required
+                    >
+                    <button type="button" class="visibility-button" id="togglePassword" aria-label="Show password">Show</button>
+                </div>
+                <button type="submit" class="primary-button">Unlock vault</button>
             </form>
 
-            <p id="loginMessage"></p>
+            <p id="loginMessage" class="form-message" role="status"></p>
         </section>
-    </div>
+    </main>
 
     <script src="login.js"></script>
 </body>

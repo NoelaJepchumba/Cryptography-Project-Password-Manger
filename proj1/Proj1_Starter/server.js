@@ -3,6 +3,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const Database = require("better-sqlite3");
 
 const { Keychain } = require("./password-manager");
 
@@ -11,6 +12,26 @@ const HOST = "127.0.0.1";
 
 const publicDir = path.join(__dirname, "public");
 const vaultFile = path.join(__dirname, "vault.json");
+const databaseFile = path.join(__dirname, "vault.db");
+const database = new Database(databaseFile);
+
+database.pragma("journal_mode = WAL");
+database.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT NOT NULL UNIQUE,
+        representation TEXT NOT NULL,
+        checksum TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS password_domains (
+        user_id INTEGER NOT NULL,
+        domain TEXT NOT NULL,
+        PRIMARY KEY (user_id, domain),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+`);
 
 // Active login sessions are kept in server memory.
 const sessions = new Map();
@@ -66,32 +87,131 @@ function readJSON(req) {
     });
 }
 
-async function saveVault(keychain) {
+async function saveVault(keychain, domains = [], email = "") {
     const [representation, checksum] = await keychain.dump();
+    const normalizedEmail = email.trim().toLowerCase();
 
-    const savedData = JSON.stringify({
-        representation,
-        checksum
+    if (!normalizedEmail) {
+        throw new Error("A vault email is required.");
+    }
+
+    const save = database.transaction(() => {
+        database.prepare(`
+            INSERT INTO users (email, representation, checksum)
+            VALUES (?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                representation = excluded.representation,
+                checksum = excluded.checksum
+        `).run(normalizedEmail, representation, checksum);
+
+        const user = database.prepare(
+            "SELECT id FROM users WHERE email = ?"
+        ).get(normalizedEmail);
+
+        database.prepare("DELETE FROM password_domains WHERE user_id = ?")
+            .run(user.id);
+
+        const insertDomain = database.prepare(`
+            INSERT OR IGNORE INTO password_domains (user_id, domain)
+            VALUES (?, ?)
+        `);
+
+        for (const domain of [...new Set(domains)]) {
+            insertDomain.run(user.id, domain);
+        }
     });
 
-    const temporaryFile = vaultFile + ".tmp";
-
-    await fs.promises.writeFile(temporaryFile, savedData, "utf8");
-    await fs.promises.rename(temporaryFile, vaultFile);
+    save();
 }
+
+function loadUserVault(email) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = database.prepare(`
+        SELECT id, representation, checksum
+        FROM users
+        WHERE email = ?
+    `).get(normalizedEmail);
+
+    if (!user) return null;
+
+    const domains = database.prepare(`
+        SELECT domain
+        FROM password_domains
+        WHERE user_id = ?
+        ORDER BY domain COLLATE NOCASE
+    `).all(user.id).map((row) => row.domain);
+
+    return {
+        representation: user.representation,
+        checksum: user.checksum,
+        domains
+    };
+}
+
+function migrateLegacyVault() {
+    if (!fs.existsSync(vaultFile)) return;
+
+    try {
+        const saved = JSON.parse(fs.readFileSync(vaultFile, "utf8"));
+        const email = typeof saved.email === "string" ? saved.email.trim().toLowerCase() : "";
+
+        if (!email || database.prepare("SELECT id FROM users WHERE email = ?").get(email)) {
+            return;
+        }
+
+        const migrate = database.transaction(() => {
+            const insert = database.prepare(`
+                INSERT INTO users (email, representation, checksum)
+                VALUES (?, ?, ?)
+            `);
+            const result = insert.run(email, saved.representation, saved.checksum);
+
+            const insertDomain = database.prepare(`
+                INSERT OR IGNORE INTO password_domains (user_id, domain)
+                VALUES (?, ?)
+            `);
+
+            for (const domain of Array.isArray(saved.domains) ? saved.domains : []) {
+                insertDomain.run(result.lastInsertRowid, domain);
+            }
+        });
+
+        migrate();
+    } catch (error) {
+        console.error("Could not migrate legacy vault.json:", error.message);
+    }
+}
+
+migrateLegacyVault();
 
 async function handleAPI(req, res, pathname) {
     try {
         // Check whether the browser is currently unlocked.
         if (req.method === "GET" && pathname === "/api/status") {
+            const session = getSession(req);
             return sendJSON(res, 200, {
-                unlocked: Boolean(getSession(req))
+                unlocked: Boolean(session),
+                email: session ? session.email : ""
             });
         }
 
         // Unlock an existing vault or create a new one.
         if (req.method === "POST" && pathname === "/api/unlock") {
-            const { password } = await readJSON(req);
+            const { email, password } = await readJSON(req);
+
+            if (typeof email !== "string" || !email.trim()) {
+                return sendJSON(res, 400, {
+                    error: "Enter your email address."
+                });
+            }
+
+            const normalizedEmail = email.trim().toLowerCase();
+
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+                return sendJSON(res, 400, {
+                    error: "Enter a valid email address."
+                });
+            }
 
             if (typeof password !== "string" || password.length === 0) {
                 return sendJSON(res, 400, {
@@ -101,24 +221,30 @@ async function handleAPI(req, res, pathname) {
 
             let keychain;
 
-            if (fs.existsSync(vaultFile)) {
-                const saved = JSON.parse(
-                    await fs.promises.readFile(vaultFile, "utf8")
-                );
+            let domains = [];
+            let savedEmail = "";
+
+            const savedUserVault = loadUserVault(normalizedEmail);
+
+            if (savedUserVault) {
+                const saved = savedUserVault;
 
                 keychain = await Keychain.load(
                     password,
                     saved.representation,
                     saved.checksum
                 );
+                domains = Array.isArray(saved.domains) ? saved.domains : [];
+                savedEmail = normalizedEmail;
             } else {
                 keychain = await Keychain.init(password);
-                await saveVault(keychain);
+                savedEmail = normalizedEmail;
+                await saveVault(keychain, domains, savedEmail);
             }
 
             const token = crypto.randomBytes(32).toString("hex");
 
-            sessions.set(token, { keychain });
+            sessions.set(token, { keychain, domains, email: savedEmail });
 
             return sendJSON(res, 200, {
                 message: "Vault unlocked successfully."
@@ -154,6 +280,17 @@ async function handleAPI(req, res, pathname) {
             });
         }
 
+        // List saved website names. Password values remain encrypted and are
+        // only returned by the explicit retrieve action.
+        if (req.method === "GET" && pathname === "/api/list") {
+            return sendJSON(res, 200, {
+                email: session.email,
+                domains: [...new Set(session.domains)].sort((a, b) =>
+                    a.localeCompare(b)
+                )
+            });
+        }
+
         // Add or update a saved password.
         if (req.method === "POST" && pathname === "/api/add") {
             const { domain, password } = await readJSON(req);
@@ -176,7 +313,12 @@ async function handleAPI(req, res, pathname) {
             }
 
             await session.keychain.set(domain.trim(), password);
-            await saveVault(session.keychain);
+
+            if (!session.domains.includes(domain.trim())) {
+                session.domains.push(domain.trim());
+            }
+
+            await saveVault(session.keychain, session.domains, session.email);
 
             return sendJSON(res, 200, {
                 message: "Password saved successfully."
@@ -217,7 +359,8 @@ async function handleAPI(req, res, pathname) {
             const removed = await session.keychain.remove(domain.trim());
 
             if (removed) {
-                await saveVault(session.keychain);
+                session.domains = session.domains.filter((item) => item !== domain.trim());
+                await saveVault(session.keychain, session.domains, session.email);
             }
 
             return sendJSON(res, 200, {
